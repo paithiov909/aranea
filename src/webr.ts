@@ -1,4 +1,6 @@
 import { ChannelType, WebR } from 'webr';
+import { stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { Backend, ConsoleEvent } from './backend.js';
 
 export class WebRBackend implements Backend {
@@ -8,8 +10,16 @@ export class WebRBackend implements Backend {
   private interrupting = false;
   private pending?: NodeJS.Immediate;
 
+  constructor(private readonly hostDirectory?: string) {}
+
   async start(emit: (event: ConsoleEvent) => void): Promise<void> {
     if (this.closed || this.runtime) throw new Error('Backend already started or closed');
+    let root: string;
+    try {
+      root = resolve(this.hostDirectory ?? process.cwd());
+    } catch (cause) {
+      throw new Error(`Cannot determine host working directory: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    }
     this.runtime = new WebR({
       interactive: true,
       channelType: ChannelType.SharedArrayBuffer,
@@ -17,6 +27,20 @@ export class WebRBackend implements Backend {
     });
     await this.runtime.init();
     if (this.closed) return;
+    try {
+      const info = await stat(root);
+      if (this.closed) return;
+      if (!info.isDirectory()) throw new Error('Not a directory');
+      await this.runtime.FS.mkdir('/workspace');
+      if (this.closed) return;
+      await this.runtime.FS.mount('NODEFS', { root }, '/workspace');
+      if (this.closed) return;
+      await this.runtime.evalRVoid('setwd("/workspace")');
+      if (this.closed) return;
+    } catch (cause) {
+      if (this.closed) return;
+      throw new Error(`Cannot mount host directory ${JSON.stringify(root)} at /workspace: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    }
     // WebR 0.6.0 buffers partial TTY output and keeps its worker alive after
     // R's exit. Its shipped R.js sets process.exitCode in quit_(). Bridge that
     // signal without replacing q()/quit() or bypassing R's .Last hooks.

@@ -12,7 +12,7 @@ Its primary target is the default GitHub Codespaces environment.
 - Use npm and commit package-lock.json.
 - Do not require a system R installation.
 - Do not invoke the external `R` or `Rscript` commands.
-- Do not add native Node.js addons or dependencies that require compilation.
+- Do not add native Node.js addons or dependencies that require local compilation.
 - Pin the WebR dependency to an exact version while the project is experimental.
 - Keep WebR-specific behavior behind a small adapter.
 - Start with a conventional terminal interface. Do not introduce a full-screen TUI framework until the basic REPL behavior has been validated.
