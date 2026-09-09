@@ -1,0 +1,27 @@
+{
+  "name": "aranea",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An interactive R console powered by WebR",
+  "type": "module",
+  "bin": {
+    "aranea": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "webr": "0.6.0",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "~5.9.3"
+  }
+}
