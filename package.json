@@ -2,7 +2,7 @@
   "name": "aranea",
   "version": "0.1.0",
   "private": true,
-  "description": "An interactive R console powered by WebR",
+  "description": "An R console and script runner powered by WebR",
   "type": "module",
   "bin": {
     "aranea": "dist/cli.js"
@@ -14,7 +14,9 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "start": "node dist/cli.js",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm run build",
+    "test:package": "node --test test/package-smoke.mjs"
   },
   "dependencies": {
     "webr": "0.6.0",
@@ -23,5 +25,10 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "~5.9.3"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }

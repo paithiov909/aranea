@@ -5,12 +5,13 @@ import type { Backend, ConsoleEvent } from './backend.js';
 
 export class WebRBackend implements Backend {
   private runtime?: WebR;
+  private initialized = false;
   private closed = false;
   private waiting = false;
   private interrupting = false;
   private pending?: NodeJS.Immediate;
 
-  constructor(private readonly hostDirectory?: string) {}
+  constructor(private readonly hostDirectory?: string, private readonly interactive = true) {}
 
   async start(emit: (event: ConsoleEvent) => void): Promise<void> {
     if (this.closed || this.runtime) throw new Error('Backend already started or closed');
@@ -21,11 +22,12 @@ export class WebRBackend implements Backend {
       throw new Error(`Cannot determine host working directory: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     }
     this.runtime = new WebR({
-      interactive: true,
+      interactive: this.interactive,
       channelType: ChannelType.SharedArrayBuffer,
-      RArgs: ['--no-save', '--no-restore'],
+      RArgs: ['--no-save', '--no-restore', ...(this.interactive ? [] : ['--quiet'])],
     });
     await this.runtime.init();
+    this.initialized = true;
     if (this.closed) return;
     try {
       const info = await stat(root);
@@ -52,6 +54,17 @@ export class WebRBackend implements Backend {
             if (stream?.tty) stream.tty.ops.fsync(stream.tty);
           }
         };
+        Module.webr.araneaFlush = flush;
+        if (${!this.interactive}) {
+          const readConsole = Module.webr.readConsole;
+          Module.webr.readConsole = () => {
+            if (Module.webr.araneaExecuting) {
+              flush();
+              Module.webr.channel.write({ type: 'aranea-input-unsupported' });
+            }
+            return readConsole();
+          };
+        }
         const prompt = Module.webr.setPrompt;
         Module.webr.setPrompt = text => { flush(); prompt(text); };
         const channel = Module.webr.channel;
@@ -89,10 +102,19 @@ export class WebRBackend implements Backend {
             code = Number(message.data);
             this.close();
             break;
+          case 'aranea-batch-error':
+            emit({ type: 'error', error: new Error(String(message.data)) });
+            this.close();
+            break;
+          case 'aranea-input-unsupported':
+            emit({ type: 'error', error: new Error('Standard input is not supported in batch mode') });
+            this.close();
+            break;
           case 'stdout':
           case 'stderr':
           case 'prompt':
             if (message.type === 'prompt') {
+              if (!this.interactive) break;
               // An interrupted synchronous read may still reach the main
               // queue after WebR resets it. A harmless message absorbs that
               // abandoned read; the worker ignores it if no read was abandoned.
@@ -111,6 +133,47 @@ export class WebRBackend implements Backend {
     } finally {
       this.closed = true;
       emit({ type: 'closed', code });
+    }
+  }
+
+  /** Execute a UTF-8 script in the global environment; completion comes through stream(). */
+  async execute(code: string): Promise<void> {
+    if (this.interactive) throw new Error('Batch execution requires a non-interactive backend');
+    if (this.closed) return;
+    const runtime = this.runtime!;
+    try {
+      await runtime.FS.writeFile('/tmp/aranea-script.R', new TextEncoder().encode(code));
+      if (this.closed) return;
+      await runtime.evalRVoid('webr::eval_js("Module.webr.araneaExecuting = true; undefined")');
+      if (this.closed) return;
+      await runtime.evalRVoid(`base::tryCatch(
+        base::source("/tmp/aranea-script.R", local=globalenv(), echo=FALSE,
+                     print.eval=TRUE, chdir=FALSE, encoding="UTF-8"),
+        error=function(e) {
+          base::message(base::conditionMessage(e))
+          base::quit(save="no", status=1, runLast=FALSE)
+        }
+      )`, {
+        captureStreams: false, captureConditions: false, captureGraphics: false,
+      });
+      if (this.closed) return;
+      await runtime.evalRVoid('base::quit(save="no", status=0)', { captureStreams: false, captureConditions: false, captureGraphics: false });
+    } catch (error) {
+      // q() rejects the RPC but leaves the synchronous input dispatcher running.
+      // Flush and send the usual exit marker through that dispatcher; its timer
+      // cannot run until the worker returns to the JavaScript event loop.
+      if (this.closed) return;
+      if (error instanceof Error && error.name === 'ExitStatus') {
+        await runtime.evalRVoid(`webr::eval_js('Module.webr.araneaFlush(); Module.webr.channel.write({ type: "aranea-exit", data: Number(process.exitCode) }); undefined')`);
+        return;
+      }
+      // A marker on the same stream drains partial output before reporting failure.
+      const message = error instanceof Error ? error.message : String(error);
+      await runtime.evalRVoid(`webr::eval_js(${JSON.stringify(`
+        Module.webr.araneaFlush();
+        Module.webr.channel.write({ type: 'aranea-batch-error', data: ${JSON.stringify(message)} });
+        undefined;
+      `)})`);
     }
   }
 
@@ -140,6 +203,9 @@ export class WebRBackend implements Backend {
     if (this.closed) return;
     this.closed = true;
     clearImmediate(this.pending);
-    this.runtime?.close();
+    // Wake a worker blocked in a synchronous input read before terminating it.
+    // Node worker termination alone can otherwise wait for that read to yield.
+    try { if (this.initialized) this.runtime?.interrupt(); }
+    finally { this.runtime?.close(); }
   }
 }

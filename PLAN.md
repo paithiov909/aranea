@@ -1,3 +1,17 @@
+# 現在の実装状況：M0〜M7
+
+以下の M0〜M4 の当初計画は履歴です。現在は基本 REPL と NODEFS に加えて、次を実装しています。
+
+| 段階 | 内容 | 完了条件 |
+|---|---|---|
+| M5 | 引数なし、ファイル、単一 `-e`、help/version/`--`。非対話評価とホストファイル読み込み | 実 WebR と子プロセスで計算、パス、読み書き、エラー停止を検証 |
+| M6 | 行単位ストリーム、末尾出力、`.Last()`、q の終了コード、シグナル、入力待ち防止 | タイムアウト付きテストで正常・異常終了とストリームを検証 |
+| M7 | files/prepack、private 維持、ローカル tarball から npx 起動 | `npm run test:package` で production install と3形式を検証 |
+
+公開・リリース・remote push は実施しません。スクリプト引数、複数 `-e`、commandArgs 互換、stdin 転送は後続です。通常の必須チェックは build/typecheck/test、配布チェックは test:package とします。Codespaces 実端末での Ctrl+C、貼り付け、IME、カーソル表示は手動確認を残します。
+
+---
+
 # aranea：最小 CLI の調査結果と実装計画
 
 ## 1. 現状と採用方針

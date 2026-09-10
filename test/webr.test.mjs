@@ -5,6 +5,13 @@ import { mkdtemp, writeFile, readFile, rm, mkdir, chmod } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+test('closing during WebR initialization does not interrupt an uninitialized channel', () => {
+  const backend = new WebRBackend();
+  void backend.start(() => {}).catch(() => {});
+  assert.doesNotThrow(() => backend.close());
+  assert.doesNotThrow(() => backend.close());
+});
+
 test('real WebR REPL: input, errors, interrupts and R shutdown', { timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'aranea 日本語 '));
   const backend = new WebRBackend(root);

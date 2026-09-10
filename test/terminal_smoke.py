@@ -10,7 +10,7 @@ import time
 import termios
 
 
-def scenario(command, action):
+def scenario(command, action, exit_timeout=5):
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(command[0], command)
@@ -47,7 +47,7 @@ def scenario(command, action):
         if b'\n> ' not in initial:
             expect(b'> ')
         code = action(send, expect, pid)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + exit_timeout
         while time.monotonic() < deadline:
             ended, status = os.waitpid(pid, os.WNOHANG)
             if ended:
@@ -104,15 +104,13 @@ def exit_status(send, expect, pid):
     return 7
 
 
-scenario([sys.argv[1], 'dist/cli.js'], interactive)
-scenario(['npm', 'start'], eof)
-scenario([sys.argv[1], 'dist/cli.js'], exit_status)
-
-
 def terminate(send, expect, pid):
     os.kill(pid, signal.SIGTERM)
     return 143
 
-scenario([sys.argv[1], 'dist/cli.js'], terminate)
-
-print('PTY scenarios passed')
+if __name__ == '__main__':
+    scenario([sys.argv[1], 'dist/cli.js'], interactive)
+    scenario(['npm', 'start'], eof)
+    scenario([sys.argv[1], 'dist/cli.js'], exit_status)
+    scenario([sys.argv[1], 'dist/cli.js'], terminate)
+    print('PTY scenarios passed')
