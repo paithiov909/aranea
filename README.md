@@ -1,10 +1,12 @@
 # aranea
 
-Node.js 上で WebR を動かす、小さな R コンソール・スクリプト実行 CLI です。GitHub Codespaces の通常のターミナルを主な対象とします。
+A small R console and script runner powered by [WebR](https://github.com/r-wasm/webr/) on Node.js, primarily intended for the standard GitHub Codespaces terminal.
 
-## 起動
+## Getting started
 
-Node.js 20 以上と npm が必要です。システムの R、Rscript、コンパイラーは不要です。
+You need Node.js 20 or later and npm. No system R installation, Rscript executable, or compiler is required. The initial npm install requires network access.
+
+From a checkout of this repository:
 
 ```sh
 npm install
@@ -12,7 +14,7 @@ npm run build
 npm start
 ```
 
-ビルド後は `node dist/cli.js` でも起動できます。CLI の bin 名は `aranea` です。build は TypeScript の変換のみを行います。引数なしの場合は標準入力・標準出力が TTY のときに REPL を起動し、パイプ入力は拒否します。
+After building, you can also start the console with `node dist/cli.js`. Running without arguments opens an interactive console and requires both stdin and stdout to be terminals; piped input is rejected.
 
 ```r
 1 + 1
@@ -23,21 +25,11 @@ f(41)
 name <- readline("name: ")
 ```
 
-入力の構文判定は R に任せ、R が要求する行ごとに送信します。貼り付けた複数行も順番に処理します。Ctrl+C は入力・計算を中断し、未送信の貼り付け入力を捨てます。
+Multiline expressions and pasted lines are processed in order. Ctrl+C cancels the current input or computation and discards queued paste input.
 
-`q()` は保存なしで R を通常終了し、`.Last()` を実行します。`q(save="no", status=7)` のような終了コードも Node に伝えます。空の入力行で Ctrl+D を押すと保存なしで worker を閉じます。この場合や SIGTERM では `.Last()` の実行を保証しません。セッションは起動時に復元しません。
+Use `q()` to quit without saving and run `.Last()`. Exit codes such as `q(save="no", status=7)` are passed through to Node.js. Ctrl+D on an empty input line closes the session without saving; `.Last()` is not guaranteed to run in this case or on SIGTERM. Sessions are not restored at startup.
 
-## 現在の範囲
-
-M0〜M7（基本 REPL、NODEFS、非対話実行、終了処理、ローカル配布検証）を実装しています。
-
-- 起動時のホスト作業ディレクトリを NODEFS で `/workspace` にマウントし、R の作業ディレクトリに設定します。設定に失敗した場合は対象パスと理由を表示して終了します。
-- フルスクリーン TUI、補完、プロット表示、パッケージ・履歴の永続化は対象外です。
-- stdout/stderr は行単位です。改行なしの `cat()` は次の入力要求時にフラッシュして一行として表示します。バイト単位の端末出力再現はしません。
-- 多行貼り付け時は先行して入力がエコーされ、後から継続プロンプトが並ぶ場合があります。実行順は維持します。
-- pager、viewer、canvas 等の未対応メッセージには通知を表示します。
-
-## 非対話実行
+## Running scripts and expressions
 
 ```sh
 node dist/cli.js script.R
@@ -47,36 +39,29 @@ node dist/cli.js --help
 node dist/cli.js --version
 ```
 
-ファイルまたは単一の `-e` を指定すると、TTY 不要の非対話モードで実行します。バナー・REPL の入力プロンプト・コードのエコーは出しません。可視の式の結果は自動表示し、代入結果は表示しません。`interactive()` は `FALSE` です。stdout/stderr は実行中に行単位で転送し、末尾の改行なし出力も終了時にフラッシュします。
+A file or a single `-e` expression runs in non-interactive mode without requiring a terminal. There is no banner, console input prompt, or code echo. Visible expression results are printed automatically; assignment results are not. `interactive()` returns `FALSE`.
 
-ファイルは UTF-8 で読み込みます。相対・絶対パス、空白・日本語、先頭の shebang に対応します。ホスト側で読み込んだ内容を WebR 内の一時ファイルとして実行するため、R の診断に `/tmp/aranea-script.R` が出る場合があります。R の作業ディレクトリはスクリプトの所在によらず、ホストの起動ディレクトリに対応する `/workspace` です。
+Script files are read as UTF-8. Relative and absolute paths, spaces and a leading shebang are supported. Diagnostics may refer to `/tmp/aranea-script.R`, the temporary copy used to execute the script inside WebR. The R working directory is `/workspace`, which corresponds to the directory where you launched aranea, regardless of the script's location.
 
-正常終了は `0`、引数・読み込み・初期化・構文・未捕捉の実行エラーは `1` です。実行エラー後の処理は続けません。通常完了と明示的な `q()` は保存なしで終了し、`.Last()` を実行します。`q(save="no", status=7)` の終了コードも引き継ぎます。SIGINT は `130`、SIGTERM は `143` で worker を閉じ、この場合の `.Last()` は保証しません。初期化のタイムアウトは30秒で、コードの実行時間には制限がありません。
+Output is forwarded to stdout and stderr line by line during execution, and trailing output without a newline is flushed before exit. Execution stops on an uncaught error.
 
-Rscript の完全互換ではありません。スクリプト引数、`commandArgs()` の互換、複数 `-e`、標準入力からのコード・データ入力は未対応です。ホスト stdin は転送せず、WebR の非対話動作に従って `readLines(stdin())` は EOF、`readline()` は指定した文字列を表示して空文字を返します。それ以外でコンソール入力待ちが発生する場合は説明付きで終了します。
+| Outcome | Exit code |
+|---|---|
+| Successful completion | `0` |
+| Argument, file reading, initialization, syntax, or uncaught runtime error | `1` |
+| Explicit `q(save="no", status=...)` | The requested status |
+| SIGINT | `130` |
+| SIGTERM | `143` |
 
-## ローカル配布と npx
+Normal completion and explicit `q()` exit without saving and run `.Last()`. SIGINT and SIGTERM close the worker without guaranteeing `.Last()`. Initialization has a 30-second timeout; code execution has no time limit.
 
-まだ npm には公開していません。公開レジストリからの `npx aranea` はこのリポジトリの成果物を指すとは限りません。ローカル tarball を使って導入・呼び出しを確認できます。
+This is not a fully compatible replacement for Rscript. Script arguments, `commandArgs()` compatibility, multiple `-e` expressions, and code or data input from host stdin are not supported. `readLines(stdin())` sees EOF, and `readline()` prints its prompt and returns an empty string. Other console input requests terminate execution with an explanation.
 
-```sh
-# リポジトリで実行。prepack がビルドします。
-npm pack
+## Working with host files
 
-# 別ディレクトリのプロジェクトで実行。実際の tarball の絶対パスを指定します。
-npm install --omit=dev /absolute/path/aranea-0.1.0.tgz
-npx --no-install aranea
-npx --no-install aranea script.R
-npx --no-install aranea -e "print('hello!')"
-```
+The directory where you launch aranea is mounted at `/workspace` and used as R's working directory. If setup fails, aranea reports the affected path and reason, then exits.
 
-配布物には `dist`、README、LICENSE、npm が必須とする package.json を含めます。実行時には aranea のソースや TypeScript は不要です。`private: true` は維持し、公開作業は別途行います。
-
-`npm run test:package` はリポジトリ外の一時ディレクトリに tarball をインストールし、上記3形式を検証します。依存インストールにネットワークを使用する場合があります。Linux の REPL 確認には Python 3 を使います。
-
-## ホストファイルの操作
-
-CLI を起動したディレクトリ内のファイルは、R から相対パスで操作できます。たとえば、ホスト側に `script.R` と `input.csv` を用意して起動します。
+Place `script.R` and `input.csv` in that directory, then use relative paths from R:
 
 ```r
 getwd() # "/workspace"
@@ -85,36 +70,50 @@ data <- read.csv("input.csv")
 write.csv(data, "output.csv", row.names = FALSE)
 ```
 
-`output.csv` はホストの起動ディレクトリに作成されます。`/workspace` 内での書き込み・上書き・削除はホストの実ファイルに直接反映され、CLI 終了後も残ります。空白や日本語を含むファイル名も使用できます。
+`output.csv` is created in the host directory where you launched aranea. Writes, overwrites, and deletions under `/workspace` directly affect real host files and persist after exit.
 
-## 構成と WebR 0.6.0 への対応
+### Keeping installed R packages across sessions
 
-`src/args.ts` は引数解析、`src/batch.ts` は非対話実行のライフサイクル、`src/cli.ts` は起動、`src/terminal.ts` は readline と入力キュー、`src/webr.ts` は WebR API を扱います。WebR は完全固定し、SharedArrayBuffer チャネルを使用します。出力の消費者はアダプター内の `stream()` 一つです。入力は `writeConsole()` が改行を付加するため、追加の改行を付けません。
+WebR's default package library is reset for each session. Because aranea mounts your current host directory, packages installed there remain available across sessions, as long as they are compatible with the WebR version you use.
 
-公開パッケージの型定義、source map、R.js を確認した上で、アダプターに次のバージョン依存の補助処理を入れています。依存ファイル自体は変更しません。
+For example, install an R package into a `.cache` directory:
 
-1. worker 内の `Module.webr.setPrompt` で TTY バッファをフラッシュします。
-2. 入力待ちの中断は worker の `channel.read` に専用メッセージを送り、`Module._Rf_onintr()` を呼びます。標準 `interrupt()` の入力キュー reset が未完了の読み取りを取り残す競合を避けます。計算中は標準 `interrupt()` を使います。中断からの復帰時には無害な同期メッセージを送り、遅れて到着する古い入力要求が次の R コマンドを消費することを防ぎます。
-3. R.js の終了処理が設定する worker の `process.exitCode` を、worker のイベントループが戻った時点で検出し、ストリームを閉じます。R の `q()` や `.Last` は置き換えません。
-
-非対話の `q()` は評価 API に `ExitStatus` を返した後も同期ディスパッチャー内に留まるため、追加の RPC でバッファをフラッシュし、同じ終了通知を送信します。非対話時の入力要求は worker の `readConsole` で検知します。
-
-これらは安定した公開 WebR API ではありません。WebR を更新するときは削除可能か再調査し、実 WebR・疑似端末の回帰テストを実行してください。
-
-直接の実行依存は `webr: "0.6.0"` と `ws` です。WebR の `WebSocketMap` は Node.js 20 では別途インストールした `ws` を必要とするため、当初の WebR のみという案から追加しました。`ws` は JavaScript 実装です。ただし WebR はブラウザー UI 向け依存も配布しており、lightningcss 等の配布済み native バイナリを推移依存として含みます。プロジェクト方針の合意済み例外としてこれを許容します。aranea 独自の native addon やローカルコンパイルは追加しません。npm の初回インストールにはネットワークが必要です。
-
-## 検証
-
-```sh
-npm run build
-npm run typecheck
-npm test
+```r
+# Disable mounting because the destination is already in a mounted directory.
+webr::install("ggplot2", lib = ".cache", mount = FALSE)
 ```
 
-Node 標準の test runner を使用します。Linux の疑似端末テストには Python 3 の標準ライブラリーを使用します（CLI 実行時には Python は不要）。CI は Node.js 20・22・24 を対象とします。
+In each new session, launch aranea from the same host directory and add `.cache` to R's library search path before loading the package:
 
-テストは実 WebR での計算、変数保持、エラー復帰、改行なし出力、複数行、readline の回答・空文字、中断後の再評価、`.Last` と q() を確認します。子プロセス・疑似端末では非 TTY 拒否、起動失敗、貼り付け、Ctrl+C、Ctrl+D、SIGTERM、終了コードを確認します。
+```r
+.libPaths(c(.libPaths(), ".cache"))
+library(ggplot2)
+```
 
-NODEFS は一時ディレクトリで作業ディレクトリ設定、`source()`、CSV の読み書き、日本語・空白を含むパス、アクセスエラー後の復帰を検証します。権限エラーのテストは Windows と root 実行時にはスキップします。無効なホストパスでは、説明付きエラーと期限内の異常終了を確認します。
+## Installing a local package
 
-Codespaces のブラウザー内ターミナルでは、日本語・IME、端末サイズ変更、貼り付け中の連続 Ctrl+C、操作後のカーソル表示を手動確認してください。疑似端末だけではブラウザー側のキー処理と描画を保証できません。
+This project has not been published to npm. `npx aranea` from the public registry may not refer to this repository's package. To install this checkout locally, first create a tarball in the repository:
+
+```sh
+npm pack
+```
+
+Then run the following in another project directory, replacing the path with the absolute path to your tarball:
+
+```sh
+npm install --omit=dev /absolute/path/aranea-0.1.0.tgz
+npx --no-install aranea
+npx --no-install aranea script.R
+npx --no-install aranea -e "print('hello!')"
+```
+
+## Limitations
+
+- There is no full-screen interface, completion, plot display, or command-history persistence. Package persistence requires installing into a host directory and setting the library path as described above.
+- Output is line-based. In the interactive console, `cat()` output without a newline is flushed as a line at the next input request; byte-for-byte terminal output is not reproduced.
+- Multiline pastes may echo ahead of execution, with continuation prompts appearing later. Execution order is preserved.
+- Unsupported pager, viewer, canvas, and similar requests display a notice.
+
+## Development
+
+Architecture notes, verification instructions, and the implementation plan are maintained in Japanese in [DEVELOPMENT.md](DEVELOPMENT.md).

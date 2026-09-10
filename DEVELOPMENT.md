@@ -1,6 +1,10 @@
-# 現在の実装状況：M0〜M7
+# aranea 開発ノート
 
-以下の M0〜M4 の当初計画は履歴です。現在は基本 REPL と NODEFS に加えて、次を実装しています。
+利用方法は [README.md](README.md) を参照してください。この文書は README の開発メモと旧 PLAN.md を統合したものです。現行実装の説明を先にまとめ、当初の調査・計画を末尾に履歴として残します。
+
+## 現在の実装状況
+
+M0〜M4（導入、基本 REPL、対話入力、中断・終了、NODEFS）に加え、M5〜M7 を実装済みです。
 
 | 段階 | 内容 | 完了条件 |
 |---|---|---|
@@ -8,17 +12,62 @@
 | M6 | 行単位ストリーム、末尾出力、`.Last()`、q の終了コード、シグナル、入力待ち防止 | タイムアウト付きテストで正常・異常終了とストリームを検証 |
 | M7 | files/prepack、private 維持、ローカル tarball から npx 起動 | `npm run test:package` で production install と3形式を検証 |
 
-公開・リリース・remote push は実施しません。スクリプト引数、複数 `-e`、commandArgs 互換、stdin 転送は後続です。通常の必須チェックは build/typecheck/test、配布チェックは test:package とします。Codespaces 実端末での Ctrl+C、貼り付け、IME、カーソル表示は手動確認を残します。
+公開・リリース・remote push は実施しません。スクリプト引数、複数 `-e`、commandArgs 互換、stdin 転送は後続です。検証手順と残る手動確認は後述します。
 
----
+## 構成と WebR 0.6.0 への対応
 
-# aranea：最小 CLI の調査結果と実装計画
+`src/args.ts` は引数解析、`src/batch.ts` は非対話実行のライフサイクル、`src/cli.ts` は起動、`src/terminal.ts` は readline と入力キュー、`src/webr.ts` は WebR API を扱います。WebR は完全固定し、SharedArrayBuffer チャネルを使用します。出力の消費者はアダプター内の `stream()` 一つです。入力は `writeConsole()` が改行を付加するため、追加の改行を付けません。
 
-## 1. 現状と採用方針
+公開パッケージの型定義、source map、R.js を確認した上で、アダプターに次のバージョン依存の補助処理を入れています。依存ファイル自体は変更しません。
+
+1. worker 内の `Module.webr.setPrompt` で TTY バッファをフラッシュします。
+2. 入力待ちの中断は worker の `channel.read` に専用メッセージを送り、`Module._Rf_onintr()` を呼びます。標準 `interrupt()` の入力キュー reset が未完了の読み取りを取り残す競合を避けます。計算中は標準 `interrupt()` を使います。中断からの復帰時には無害な同期メッセージを送り、遅れて到着する古い入力要求が次の R コマンドを消費することを防ぎます。
+3. R.js の終了処理が設定する worker の `process.exitCode` を、worker のイベントループが戻った時点で検出し、ストリームを閉じます。R の `q()` や `.Last` は置き換えません。
+
+非対話の `q()` は評価 API に `ExitStatus` を返した後も同期ディスパッチャー内に留まるため、追加の RPC でバッファをフラッシュし、同じ終了通知を送信します。非対話時の入力要求は worker の `readConsole` で検知します。
+
+これらは安定した公開 WebR API ではありません。WebR を更新するときは削除可能か再調査し、実 WebR・疑似端末の回帰テストを実行してください。
+
+直接の実行依存は `webr: "0.6.0"` と `ws` です。WebR の `WebSocketMap` は Node.js 20 では別途インストールした `ws` を必要とするため、当初の WebR のみという案から追加しました。`ws` は JavaScript 実装です。ただし WebR はブラウザー UI 向け依存も配布しており、lightningcss 等の配布済み native バイナリを推移依存として含みます。プロジェクト方針の合意済み例外としてこれを許容します。aranea 独自の native addon やローカルコンパイルは追加しません。npm の初回インストールにはネットワークが必要です。
+
+## ローカル配布の方針
+
+`package.json` の `files` と `prepack` で配布内容とビルドを管理します。配布物には `dist`、README、LICENSE、npm が必須とする package.json を含めます。実行時には aranea のソースや TypeScript は不要です。`private: true` は維持し、公開作業は別途行います。
+
+```sh
+npm pack
+npm run test:package
+```
+
+`npm pack` は `prepack` でビルドします。`npm run test:package` はリポジトリ外の一時ディレクトリに tarball をインストールし、production install と `npx --no-install aranea` の REPL・ファイル・単一 `-e` の3形式を検証します。依存インストールにネットワークを使用する場合があります。Linux の REPL 確認には Python 3 を使います。
+
+## 検証
+
+```sh
+npm run build
+npm run typecheck
+npm test
+```
+
+Node 標準の test runner を使用します。Linux の疑似端末テストには Python 3 の標準ライブラリーを使用します（CLI 実行時には Python は不要）。CI は Node.js 20・22・24 を対象とします。
+
+テストは実 WebR での計算、変数保持、エラー復帰、改行なし出力、複数行、readline の回答・空文字、中断後の再評価、`.Last` と q() を確認します。子プロセス・疑似端末では非 TTY 拒否、起動失敗、貼り付け、Ctrl+C、Ctrl+D、SIGTERM、終了コードを確認します。
+
+NODEFS は一時ディレクトリで作業ディレクトリ設定、`source()`、CSV の読み書き、日本語・空白を含むパス、アクセスエラー後の復帰を検証します。権限エラーのテストは Windows と root 実行時にはスキップします。無効なホストパスでは、説明付きエラーと期限内の異常終了を確認します。
+
+Codespaces のブラウザー内ターミナルでは、日本語・IME、端末サイズ変更、貼り付け中の連続 Ctrl+C、操作後のカーソル表示を手動確認してください。疑似端末だけではブラウザー側のキー処理と描画を保証できません。
+
+## 当初計画を読む際の注意
+
+以下は実装前の履歴であり、現在の仕様や未完了タスクの一覧ではありません。特に、当初の「実行依存は WebR のみ」は `ws` の追加で、「バッチ実行は追加しない」は M5〜M6 で変更されています。「実証が必要な点」は当時の検証計画であり、現在の自動テスト範囲と残る手動確認は上の「検証」を参照してください。公開版・開発版の比較やリンク先に関する記述も調査当時のものです。
+
+## 当初の調査・実装計画（履歴）
+
+### 1. 現状と採用方針
 
 **Node.js 標準の `node:readline` と、WebR の `writeConsole()`／`stream()` を組み合わせる構成を推奨します。** R の構文判定と評価は WebR 内の REPL に任せます。
 
-リポジトリには [AGENTS.md](/workspaces/aranea/AGENTS.md)、LICENSE、.gitignore のみがあり、package.json・ソース・テストはありません。AGENTS.md は未追跡です。調査前後で状態は変わっておらず、コード変更・依存インストール・R の実行は行っていません。現在の環境は Node.js 24.20.0、npm 11.19.0 です。
+当初調査時点では package.json・ソース・テストは未作成で、API と配布物の静的確認のみを行っていました。以下はその時点の判断と完了条件を記録したものです。
 
 AGENTS.md の TypeScript／ESM、Node.js 20 以上、WebR の完全固定、小さなアダプター、システム R 不使用という方針を採用します。追加確認で決まった内容は次のとおりです。
 
@@ -28,7 +77,7 @@ AGENTS.md の TypeScript／ESM、Node.js 20 以上、WebR の完全固定、小�
 
 「npm install と npm run build だけで起動できる」は、**この２コマンドで準備が完了し、`npm start` または `node dist/cli.js` で起動できる**という意味で扱います。build 自体は REPL を起動しません。
 
-## 2. 確認できた WebR API と方式比較
+### 2. 確認できた WebR API と方式比較
 
 調査時の npm 公開版は **`webr@0.6.0`** でした。一方、公式ドキュメントの `latest` は **0.6.1 開発版**を表示しています。このため npm の公開 tarball に含まれる package.json、型定義、配布 JavaScript と source map を照合しました。以下の実装上の判断は公開版を基準にします。[npm 公開パッケージ](https://www.npmjs.com/package/webr)、[公式ドキュメント](https://docs.r-wasm.org/webr/latest/communication.html)
 
@@ -59,7 +108,7 @@ API の概要は公式の [WebR クラス](https://docs.r-wasm.org/webr/latest/a
 
 なお、`webr@0.6.0` はブラウザー UI 関連の依存も含み、`lightningcss` が推移依存として導入されます。今回合意した例外を文書化し、クリーンインストール時にコンパイル不要であることを確認します。
 
-## 3. 最小構成と振る舞い
+### 3. 最小構成と振る舞い
 
 構成は三つに分けます。
 
@@ -83,7 +132,7 @@ API の概要は公式の [WebR クラス](https://docs.r-wasm.org/webr/latest/a
 
 `node:readline` は行入力と SIGINT・EOF を扱えますが、その Interface が開いたままだと Node が終了しないため、後始末を明示します。[Node.js readline](https://nodejs.org/api/readline.html)
 
-## 4. 実証が必要な点
+### 4. 実証が必要な点
 
 **今回は API・実装の静的確認までです。以下は動作確認済みとは扱いません。**
 
@@ -100,7 +149,7 @@ API の概要は公式の [WebR クラス](https://docs.r-wasm.org/webr/latest/a
 
 NODEFS 自体は公式に Node.js 対応が明記されています。ただしホストの cwd と R の cwd は別なので、後続実装ではホストの起動ディレクトリを `/workspace` に mount してから R の cwd を設定します。ホストファイルへの書き込みは実ファイルに反映されることを README に記載します。[公式 NODEFS 手順](https://docs.r-wasm.org/webr/latest/mounting.html)
 
-## 5. マイルストーンと完了条件
+### 5. マイルストーンと完了条件
 
 | 段階 | 内容 | 完了条件・テスト方法 |
 |---|---|---|
