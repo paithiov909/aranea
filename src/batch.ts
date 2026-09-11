@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import type { Invocation } from './args.js';
-import { WebRBackend } from './webr.js';
+import { WebRSession } from './webr-session.js';
 
 export async function runBatch(invocation: Extract<Invocation, { mode: 'file' | 'expression' }>): Promise<number> {
-  const backend = new WebRBackend(undefined, false);
+  const session = new WebRSession(undefined, false);
   return new Promise<number>(resolve => {
     let closed = false;
     const finish = (code: number): void => {
@@ -12,7 +12,7 @@ export async function runBatch(invocation: Extract<Invocation, { mode: 'file' | 
       clearTimeout(timer);
       process.off('SIGINT', interrupt);
       process.off('SIGTERM', terminate);
-      backend.close();
+      session.close();
       resolve(code);
     };
     const fail = (error: unknown): void => {
@@ -28,7 +28,7 @@ export async function runBatch(invocation: Extract<Invocation, { mode: 'file' | 
     void (async () => {
       const code = invocation.mode === 'file' ? await readFile(invocation.path, 'utf8') : invocation.code;
       if (closed) return;
-      await backend.start(event => {
+      await session.start(event => {
         if (closed) return;
         switch (event.type) {
           case 'stdout': process.stdout.write(event.text + '\n'); break;
@@ -39,7 +39,10 @@ export async function runBatch(invocation: Extract<Invocation, { mode: 'file' | 
       });
       if (closed) return;
       clearTimeout(timer);
-      await backend.execute(code);
+      const result = await session.evaluateScript(code);
+      if (closed) return;
+      if (result === 'completed') await session.quit();
+      else if (result === 'failed') await session.quit(1, false);
     })().catch(fail);
   });
 }
