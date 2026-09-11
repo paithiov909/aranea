@@ -16,7 +16,7 @@ M0〜M4（導入、基本 REPL、対話入力、中断・終了、NODEFS）に�
 
 ## 構成と WebR 0.6.0 への対応
 
-`src/args.ts` は引数解析、`src/batch.ts` は非対話実行のライフサイクル、`src/cli.ts` は起動、`src/terminal.ts` は readline と入力キュー、`src/webr.ts` は WebR API を扱います。WebR は完全固定し、SharedArrayBuffer チャネルを使用します。出力の消費者はアダプター内の `stream()` 一つです。入力は `writeConsole()` が改行を付加するため、追加の改行を付けません。
+`src/args.ts` は引数解析、`src/batch.ts` は一回限りの非対話実行ポリシー、`src/cli.ts` は起動、`src/terminal.ts` は readline と入力キュー、`src/webr.ts` は対話コンソール用の薄いアダプターを扱います。`src/webr-session.ts` の `WebRSession` が WebR インスタンスの生成・初期化・NODEFS mount・WebR 0.6.0 用 bridge・単一の stream consumer・interrupt・close を所有します。スクリプト評価は session を終了せず、現行の batch runner が評価結果に応じて R の通常終了を要求します。これにより、対話／一回限りという利用ポリシーと WebR の lifetime を分離しています。WebR は完全固定し、SharedArrayBuffer チャネルを使用します。入力は `writeConsole()` が改行を付加するため、追加の改行を付けません。
 
 公開パッケージの型定義、source map、R.js を確認した上で、アダプターに次のバージョン依存の補助処理を入れています。依存ファイル自体は変更しません。
 
