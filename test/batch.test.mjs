@@ -87,6 +87,9 @@ test('batch input does not wait for host stdin', () => {
   const readline = run(['-e', 'readline("name: ")']);
   assert.equal(readline.status, 0, readline.stderr);
   assert.equal(readline.stdout, 'name: \n[1] ""\n');
+  const shutdown = run(['-e', '.Last <- function() webr::eval_js("Module.webr.readConsole()")']);
+  assert.equal(shutdown.status, 1, shutdown.stderr);
+  assert.match(shutdown.stderr, /Standard input is not supported/);
 });
 
 for (const [signal, status] of [['SIGINT', 130], ['SIGTERM', 143]]) {
