@@ -184,8 +184,12 @@ export class WebRSession {
   /** Ask R to exit normally, including .Last hooks. */
   async quit(status = 0, runLast = true): Promise<void> {
     if (this.closed || this.rExited) return;
+    const runtime = this.startedRuntime();
     try {
-      await this.startedRuntime().evalRVoid(`base::quit(save="no", status=${status}, runLast=${runLast ? 'TRUE' : 'FALSE'})`, {
+      // Keep batch input detection active while shutdown hooks run.
+      await runtime.evalRVoid('webr::eval_js("Module.webr.araneaExecuting = true; undefined")');
+      if (this.closed) return;
+      await runtime.evalRVoid(`base::quit(save="no", status=${status}, runLast=${runLast ? 'TRUE' : 'FALSE'})`, {
         captureStreams: false, captureConditions: false, captureGraphics: false,
       });
     } catch (error) {
