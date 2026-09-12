@@ -42,6 +42,10 @@ aranea shutdown
 
 The server keeps one WebR session and its `.GlobalEnv` for the lifetime of the foreground process. Linux clients in the same absolute working directory connect through a deterministic socket under `/tmp`; there is no authentication or network transport.
 
+R exit codes are not currently propagated through `aranea eval`. For example, `aranea eval 'q(status=7)'` stops the R session but the client exits with code `1`, not `7`; even `aranea eval 'q()'` currently exits with code `1`. If the connection closes before a response arrives, the client may also report `Server closed the connection before responding`. This limitation is tracked in [issue #3](https://github.com/paithiov909/aranea/issues/3).
+
+### One-shot scripts and expressions
+
 ```sh
 node dist/cli.js script.R
 node dist/cli.js -e "print('hello!')"
