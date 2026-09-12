@@ -17,7 +17,12 @@ try {
     process.exitCode = await runServer();
   } else if (invocation.mode === 'eval' || invocation.mode === 'shutdown') {
     try { process.exitCode = await runClient(invocation.mode === 'eval' ? 'eval' : 'shutdown', invocation.mode === 'eval' ? { code: invocation.code } : {}); }
-    catch { process.stderr.write('aranea: no running server for this workspace\n'); process.exitCode = 1; }
+    catch (error) {
+      if (!(error instanceof Error) || !('code' in error) ||
+          (error.code !== 'ENOENT' && error.code !== 'ECONNREFUSED')) throw error;
+      process.stderr.write('aranea: no running server for this workspace\n');
+      process.exitCode = 1;
+    }
   } else if (invocation.mode === 'file' || invocation.mode === 'expression') {
     process.exitCode = await runBatch(invocation);
   } else if (!process.stdin.isTTY || !process.stdout.isTTY) {
