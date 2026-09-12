@@ -31,6 +31,17 @@ Use `q()` to quit without saving and run `.Last()`. Exit codes such as `q(save="
 
 ## Running scripts and expressions
 
+### Persistent server
+
+```sh
+aranea serve
+aranea eval 'x <- 40'
+aranea eval 'x + 2'
+aranea shutdown
+```
+
+The server keeps one WebR session and its `.GlobalEnv` for the lifetime of the foreground process. Linux clients in the same absolute working directory connect through a deterministic socket under `/tmp`; there is no authentication or network transport.
+
 ```sh
 node dist/cli.js script.R
 node dist/cli.js -e "print('hello!')"
