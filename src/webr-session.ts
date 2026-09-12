@@ -15,6 +15,7 @@ export class WebRSession {
   private waiting = false;
   private interrupting = false;
   private pending?: NodeJS.Immediate;
+  private outputDrained?: () => void;
 
   constructor(private readonly hostDirectory?: string, private readonly interactive = true) {}
 
@@ -106,6 +107,10 @@ export class WebRSession {
       for await (const message of this.runtime!.stream()) {
         if (this.closed) break;
         switch (message.type) {
+          case 'aranea-output-drained':
+            this.outputDrained?.();
+            this.outputDrained = undefined;
+            break;
           case 'aranea-exit':
             code = Number(message.data);
             this.rExited = true;
@@ -136,6 +141,7 @@ export class WebRSession {
       if (!this.closed) emit({ type: 'error', error });
     } finally {
       this.closed = true;
+      this.outputDrained?.();
       emit({ type: 'closed', code });
     }
   }
@@ -161,7 +167,7 @@ export class WebRSession {
         }
       )`, { captureStreams: false, captureConditions: false, captureGraphics: false });
       if (this.closed || this.rExited) return 'exited';
-      await runtime.evalRVoid('webr::eval_js("Module.webr.araneaExecuting = false; undefined")');
+      await this.finishEvaluation();
       return succeeded ? 'completed' : 'failed';
     } catch (error) {
       if (this.closed) return 'exited';
@@ -177,7 +183,24 @@ export class WebRSession {
         Module.webr.channel.write({ type: 'aranea-batch-error', data: ${JSON.stringify(message)} });
         undefined;
       `)})`);
+      await this.finishEvaluation();
       return 'failed';
+    }
+  }
+
+  private async finishEvaluation(): Promise<void> {
+    if (this.closed) return;
+    const drained = new Promise<void>(resolve => { this.outputDrained = resolve; });
+    try {
+      await this.startedRuntime().evalRVoid(`webr::eval_js('
+        Module.webr.araneaFlush();
+        Module.webr.araneaExecuting = false;
+        Module.webr.channel.write({ type: "aranea-output-drained" });
+        undefined
+      ')`);
+      await drained;
+    } finally {
+      this.outputDrained = undefined;
     }
   }
 
@@ -229,6 +252,7 @@ export class WebRSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.outputDrained?.();
     clearImmediate(this.pending);
     try { if (this.initialized) this.runtime?.interrupt(); }
     finally { this.runtime?.close(); }

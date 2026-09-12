@@ -44,13 +44,53 @@ export async function runServer(): Promise<number> {
     if (req.method === 'shutdown') { send(socket, response(req.id, { status: 'shutting_down' })); setImmediate(() => void cleanup().finally(() => server.close())); return; }
     send(socket, error(req.id, -32601, 'Method not found'));
   };
-  await session.start(event => { if (event.type === 'stdout' || event.type === 'stderr') active?.({ jsonrpc: '2.0', method: event.type, params: { text: event.text + '\n' } }); if (event.type === 'closed') void cleanup().finally(() => server.close()); });
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
+  try {
+    await session.start(event => { if (event.type === 'stdout' || event.type === 'stderr') active?.({ jsonrpc: '2.0', method: event.type, params: { text: event.text + '\n' } }); if (event.type === 'error') active?.({ jsonrpc: '2.0', method: 'stderr', params: { text: `aranea: ${event.error instanceof Error ? event.error.message : String(event.error)}\n` } }); if (event.type === 'closed') void cleanup().finally(() => server.close()); });
+    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
+  } catch (cause) {
+    // This process may have lost a bind race; leave the winner's socket alone.
+    shutting = true;
+    session.close();
+    for (const client of clients) client.destroy();
+    server.close();
+    throw cause;
+  }
   process.stdout.write('aranea: server ready\n');
   await new Promise<void>(resolve => { process.once('SIGINT', () => void cleanup().finally(resolve)); process.once('SIGTERM', () => void cleanup().finally(resolve)); server.once('close', resolve); });
   return 0;
 }
 export async function runClient(method: 'eval'|'shutdown', params?: object): Promise<number> {
   const socket = await new Promise<Socket>((resolve, reject) => { const s = createConnection(socketPath()); s.once('connect', () => resolve(s)); s.once('error', reject); });
-  return await new Promise<number>((resolve, reject) => { let buffer = ''; socket.on('data', chunk => { buffer += chunk; let i; while ((i = buffer.indexOf('\n')) >= 0) { const item = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1); if (item.method === 'stdout') process.stdout.write(item.params.text); else if (item.method === 'stderr') process.stderr.write(item.params.text); else if (item.error) { reject(new Error(item.error.message)); socket.end(); } else { const status = item.result?.status; resolve(status === 'completed' || status === 'shutting_down' ? 0 : 1); socket.end(); } } }); socket.write(JSON.stringify({ jsonrpc:'2.0', id:1, method, params })+'\n'); socket.once('error', reject); });
+  return await new Promise<number>((resolve, reject) => {
+    let buffer = '';
+    let settled = false;
+    const fail = (cause: Error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(cause);
+    };
+    const disconnected = () => fail(new Error('Server closed the connection before responding'));
+    socket.once('error', fail);
+    socket.once('end', disconnected);
+    socket.once('close', disconnected);
+    socket.on('data', chunk => {
+      buffer += chunk;
+      let i;
+      while (!settled && (i = buffer.indexOf('\n')) >= 0) {
+        const item = JSON.parse(buffer.slice(0, i));
+        buffer = buffer.slice(i + 1);
+        if (item.method === 'stdout') process.stdout.write(item.params.text);
+        else if (item.method === 'stderr') process.stderr.write(item.params.text);
+        else if (item.error) fail(new Error(item.error.message));
+        else {
+          settled = true;
+          const status = item.result?.status;
+          resolve(status === 'completed' || status === 'shutting_down' ? 0 : 1);
+          socket.end();
+        }
+      }
+    });
+    socket.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) + '\n');
+  });
 }

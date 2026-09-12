@@ -32,7 +32,7 @@ test('argument parser accepts only the supported invocation shapes', () => {
 test('batch expressions print visible values, stream diagnostics and run .Last', () => {
   const result = run(['-e', 'q <- identity\nx <- 40\nx + 2\ninteractive()\nmessage("MESSAGE")\nwarning("WARNING")\ncat("tail")\n.Last <- function() cat("LAST")']);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, '[1] 42\n[1] FALSE\ntailLAST\n');
+  assert.equal(result.stdout, '[1] 42\n[1] FALSE\ntail\nLAST\n');
   assert.match(result.stderr, /MESSAGE/);
   assert.match(result.stderr, /WARNING/);
   const empty = run(['-e', '']);
