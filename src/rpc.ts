@@ -24,28 +24,65 @@ export async function runServer(): Promise<number> {
   let server: ReturnType<typeof createServer>;
   let shutting = false, active: ((v: unknown) => void) | undefined;
   const clients = new Set<Socket>();
-  const cleanup = async () => { if (shutting) return; shutting = true; try { await session.quit(); } catch { session.close(); } for (const c of clients) c.destroy(); try { unlinkSync(path); } catch {} };
+  const shutdownRequests = new Map<Socket, Request['id'][]>();
+  let queue: Promise<void> = Promise.resolve();
+  let cleanupPromise: Promise<void> | undefined;
+  let markSessionClosed!: () => void;
+  const sessionClosed = new Promise<void>(resolve => { markSessionClosed = resolve; });
+  const cleanup = (): Promise<void> => {
+    if (cleanupPromise) return cleanupPromise;
+    shutting = true;
+    cleanupPromise = (async () => {
+      await queue;
+      let failure: unknown;
+      // WebR can close its channel before quit()'s final RPC resolves.
+      // The consumed closed event is sufficient to confirm R has exited.
+      try { await Promise.race([session.quit(), sessionClosed]); }
+      catch (cause) { failure = cause; session.close(); }
+      await sessionClosed;
+      // Stop listening before acknowledging shutdown. Waiting for the close
+      // event here would deadlock on the clients still waiting for a response.
+      server.close();
+      for (const client of clients) {
+        const replies = (shutdownRequests.get(client) ?? []).map(id =>
+          failure === undefined
+            ? response(id, { status: 'shutting_down' })
+            : error(id, -32603, String(failure)));
+        client.end(replies.map(reply => JSON.stringify(reply) + '\n').join(''), () => client.destroy());
+      }
+      await serverClosed;
+    })();
+    return cleanupPromise;
+  };
   server = createServer(socket => {
     clients.add(socket); let buffer = '';
-    socket.on('close', () => clients.delete(socket));
+    socket.on('close', () => { clients.delete(socket); shutdownRequests.delete(socket); });
+    socket.on('error', () => socket.destroy());
     socket.on('data', chunk => { buffer += chunk.toString(); let i; while ((i = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); void dispatch(line, socket); } });
   });
-  let queue: Promise<void> = Promise.resolve();
+  const serverClosed = new Promise<void>(resolve => server.once('close', resolve));
   const dispatch = async (line: string, socket: Socket) => {
     let req: Request;
     try { req = JSON.parse(line); } catch { send(socket, error(null, -32700, 'Parse error')); return; }
     if (!req || req.jsonrpc !== '2.0' || typeof req.method !== 'string') { send(socket, error(req?.id ?? null, -32600, 'Invalid Request')); return; }
     if (req.method === 'eval') {
+      if (shutting) { send(socket, error(req.id, -32000, 'Server is shutting down')); return; }
       if (!req.params || typeof (req.params as {code?: unknown}).code !== 'string') { send(socket, error(req.id, -32602, 'Invalid params')); return; }
       const task = queue.then(async () => { active = v => send(socket, v); try { const status = await session.evaluateScript((req.params as {code:string}).code); send(socket, response(req.id, { status })); if (status === 'exited') void cleanup(); } finally { active = undefined; } });
       queue = task.catch(() => {});
       return void task.catch(e => send(socket, error(req.id, -32603, String(e))));
     }
-    if (req.method === 'shutdown') { send(socket, response(req.id, { status: 'shutting_down' })); setImmediate(() => void cleanup().finally(() => server.close())); return; }
+    if (req.method === 'shutdown') {
+      const ids = shutdownRequests.get(socket) ?? [];
+      ids.push(req.id);
+      shutdownRequests.set(socket, ids);
+      await cleanup();
+      return;
+    }
     send(socket, error(req.id, -32601, 'Method not found'));
   };
   try {
-    await session.start(event => { if (event.type === 'stdout' || event.type === 'stderr') active?.({ jsonrpc: '2.0', method: event.type, params: { text: event.text + '\n' } }); if (event.type === 'error') active?.({ jsonrpc: '2.0', method: 'stderr', params: { text: `aranea: ${event.error instanceof Error ? event.error.message : String(event.error)}\n` } }); if (event.type === 'closed') void cleanup().finally(() => server.close()); });
+    await session.start(event => { if (event.type === 'stdout' || event.type === 'stderr') active?.({ jsonrpc: '2.0', method: event.type, params: { text: event.text + '\n' } }); if (event.type === 'error') active?.({ jsonrpc: '2.0', method: 'stderr', params: { text: `aranea: ${event.error instanceof Error ? event.error.message : String(event.error)}\n` } }); if (event.type === 'closed') { markSessionClosed(); if (!shutting) void cleanup(); } });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
   } catch (cause) {
     // This process may have lost a bind race; leave the winner's socket alone.
@@ -56,7 +93,16 @@ export async function runServer(): Promise<number> {
     throw cause;
   }
   process.stdout.write('aranea: server ready\n');
-  await new Promise<void>(resolve => { process.once('SIGINT', () => void cleanup().finally(resolve)); process.once('SIGTERM', () => void cleanup().finally(resolve)); server.once('close', resolve); });
+  const stop = () => { void cleanup(); };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try {
+    await serverClosed;
+    await cleanupPromise;
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+  }
   return 0;
 }
 export async function runClient(method: 'eval'|'shutdown', params?: object): Promise<number> {
