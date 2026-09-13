@@ -14,13 +14,11 @@
     "url": "https://github.com/paithiov909/aranea/issues"
   },
   "keywords": [
-    "r",
-    "webr",
+    "R",
+    "webR",
     "console",
     "repl",
-    "cli",
-    "rscript",
-    "codespaces"
+    "cli"
   ],
   "bin": {
     "aranea": "dist/cli.js"
