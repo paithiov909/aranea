@@ -1,9 +1,27 @@
 {
-  "name": "aranea",
+  "name": "@paithiov909/aranea",
   "version": "0.1.0",
-  "private": true,
-  "description": "An R console and script runner powered by WebR",
+  "description": "An R console and script runner powered by WebR, running entirely on Node.js.",
+  "author": "paithiov909",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paithiov909/aranea.git"
+  },
+  "homepage": "https://github.com/paithiov909/aranea#readme",
+  "bugs": {
+    "url": "https://github.com/paithiov909/aranea/issues"
+  },
+  "keywords": [
+    "r",
+    "webr",
+    "console",
+    "repl",
+    "cli",
+    "rscript",
+    "codespaces"
+  ],
   "bin": {
     "aranea": "dist/cli.js"
   },
@@ -30,5 +48,9 @@
     "dist",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }
